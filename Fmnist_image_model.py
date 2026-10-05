@@ -113,3 +113,5 @@ with torch.no_grad():
         test_correct += (predicted == batch_labels).sum().item()
 test_accuracy = test_correct / test_total
 print(f"Test Accuracy: {test_accuracy:.4f}")
+
+torch.save(vgg16.state_dict(), "vgg16_weights.pth")
