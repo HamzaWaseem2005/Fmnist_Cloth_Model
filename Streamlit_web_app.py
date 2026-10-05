@@ -3,35 +3,20 @@ import torch
 import torch.nn as nn
 import torchvision.models as models
 from torchvision import transforms
-from PIL import Image
+from PIL import Image, ImageOps
 import numpy as np
 import plotly.express as px
-st.markdown("""
-<style>
-.stApp {
-  background-image: url('YOUR_IMAGE_URL_HERE');
-  background-size: cover;
-  background-position: center;
-  background-repeat: no-repeat;
-  background-attachment: fixed;
-}
-.stApp::before {
-  content: "";
-  position: fixed;
-  top: 0; left: 0; width: 100%; height: 100%;
-  background-color: rgba(0, 0, 0, 0.3);  /* optional overlay to make text readable */
-  z-index: -1;
-}
-</style>
-""", unsafe_allow_html=True)
+
+st.set_page_config(page_title="Fashion MNIST Classifier", layout="wide")
+
 page_bg_img = """
 <style>
 .stApp {
-background-image: url("https://i.postimg.cc/v8kqL8my/black-trianglify.jpg");
-background-size: cover;
-background-position: center;
-background-repeat: no-repeat;
-background-attachment: fixed;
+    background-image: url("https://i.postimg.cc/v8kqL8my/black-trianglify.jpg");
+    background-size: cover;
+    background-position: center;
+    background-repeat: no-repeat;
+    background-attachment: fixed;
 }
 </style>
 """
@@ -39,30 +24,31 @@ st.markdown(page_bg_img, unsafe_allow_html=True)
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-vgg16 = models.vgg16(pretrained=True)
-for param in vgg16.features.parameters():
-    param.requires_grad = False
 
-vgg16.classifier = nn.Sequential(
-    nn.Linear(25088 , 1024),
-    nn.ReLU(),
-    nn.Dropout(0.3),
-    nn.Linear(1024 , 512),
-    nn.ReLU(),
-    nn.Dropout(0.3),
-    nn.Linear(512 , 10)
-)
+@st.cache_resource
+def load_model():
+    model = models.vgg16(weights=None)
+    model.classifier = nn.Sequential(
+        nn.Linear(25088, 1024),
+        nn.ReLU(),
+        nn.Dropout(0.3),
+        nn.Linear(1024, 512),
+        nn.ReLU(),
+        nn.Dropout(0.3),
+        nn.Linear(512, 10),
+    )
+    model.load_state_dict(torch.load("vgg16_weights.pth", map_location=device))
+    return model.to(device).eval()
 
-vgg16.load_state_dict(torch.load("vgg16_weights.pth", map_location=device))
-vgg16 = vgg16.to(device)
-vgg16.eval()
+
+vgg16 = load_model()
 
 custom_transform = transforms.Compose([
     transforms.Resize(256),
     transforms.CenterCrop(224),
     transforms.ToTensor(),
     transforms.Normalize(mean=[0.485, 0.456, 0.406],
-                         std=[0.229, 0.224, 0.225])
+                         std=[0.229, 0.224, 0.225]),
 ])
 
 class_names = [
@@ -70,7 +56,6 @@ class_names = [
     "Sandal", "Shirt", "Sneaker", "Bag", "Ankle Boot"
 ]
 
-st.set_page_config(page_title="Fashion MNIST Classifier", layout="wide")
 st.sidebar.markdown("""
 <div style="background: linear-gradient(135deg, #ff416c, #ff4b2b);color:white;padding:15px;border-radius:10px;margin-bottom:10px">
 <h3>Instructions</h3>
@@ -96,6 +81,7 @@ st.sidebar.markdown("""
 """, unsafe_allow_html=True)
 
 show_probs = st.sidebar.checkbox("Show Class Probabilities", value=True)
+invert = st.sidebar.checkbox("Invert colors (for light backgrounds)", value=False)
 
 st.title("👗 Fashion MNIST Classifier")
 st.markdown("Upload an image and the model will predict its class. See probabilities if enabled.")
@@ -103,28 +89,34 @@ st.markdown("Upload an image and the model will predict its class. See probabili
 uploaded_file = st.file_uploader("Choose an image...", type=["jpg", "jpeg", "png"])
 
 if uploaded_file is not None:
-    image = Image.open(uploaded_file).convert("RGB")
+    original = Image.open(uploaded_file).convert("RGB")
+
+    gray = original.convert("L").resize((28, 28))
+    if invert:
+        gray = ImageOps.invert(gray)
+    processed = Image.merge("RGB", (gray, gray, gray))
+
     col1, col2 = st.columns([1, 1.5])
 
     with col1:
-        st.image(image, caption="Uploaded Image", use_column_width=True)
+        st.image(original, caption="Uploaded Image", use_container_width=True)
 
-    img_tensor = custom_transform(image).unsqueeze(0).to(device)
+    img_tensor = custom_transform(processed).unsqueeze(0).to(device)
     with torch.no_grad():
         outputs = vgg16(img_tensor)
         probs = torch.softmax(outputs, dim=1).cpu().numpy()[0]
-        predicted_index = np.argmax(probs)
+        predicted_index = int(np.argmax(probs))
         predicted_class = class_names[predicted_index]
         confidence = probs[predicted_index]
 
     with col2:
         st.markdown(f"### Predicted Class: **{predicted_class}**")
-        st.markdown(f"**Confidence:** {confidence*100:.2f}%")
+        st.markdown(f"**Confidence:** {confidence * 100:.2f}%")
 
         if show_probs:
             df_probs = {
                 "Class": class_names,
-                "Probability": probs
+                "Probability": probs,
             }
             fig = px.bar(
                 df_probs,
@@ -133,14 +125,13 @@ if uploaded_file is not None:
                 orientation="h",
                 text=np.round(probs, 2),
                 color="Probability",
-                color_continuous_scale="sunset"
+                color_continuous_scale="sunset",
             )
             fig.update_layout(
                 xaxis_title="Probability",
                 yaxis_title="Class",
                 yaxis=dict(autorange="reversed"),
                 margin=dict(l=20, r=20, t=20, b=20),
-                height=400
+                height=400,
             )
             st.plotly_chart(fig, use_container_width=True)
-
